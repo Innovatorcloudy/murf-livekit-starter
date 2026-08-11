@@ -91,20 +91,20 @@ class Assistant(Agent):
             girl_child_age: The age of the girl child in years. (Mandatory when checking Sukanya Samriddhi Yojana / SSY). Use -1 if not applicable.
             is_indian_resident: True if the beneficiary is a resident of India, False otherwise.
         """
-        # SIMULATE TRANSIENT FAILURE (Step 4 & user request)
-        # The first call to this tool in the session will fail, and subsequent retries will succeed.
-        attempts = getattr(self, "_eligibility_attempts", 0) + 1
-        self._eligibility_attempts = attempts
-        if attempts == 1:
-            raise Exception("API Connection Timeout (Simulated Transient Error)")
-        
-        logger.info(f"Tool check_scheme_eligibility called (Attempt {attempts}) for scheme: {scheme_name}, user_id: {self.user_id}")
         import json
         from datetime import datetime
         
         today_str = datetime.now().strftime("%B %d, %Y")
         
         try:
+            # SIMULATE TRANSIENT FAILURE (Step 4 & user request)
+            # The first call to this tool in the session will fail, and subsequent retries will succeed.
+            attempts = getattr(self, "_eligibility_attempts", 0) + 1
+            self._eligibility_attempts = attempts
+            if attempts == 1:
+                raise Exception("API Connection Timeout (Simulated Transient Error)")
+            
+            logger.info(f"Tool check_scheme_eligibility called (Attempt {attempts}) for scheme: {scheme_name}, user_id: {self.user_id}")
             name_upper = scheme_name.upper().strip()
             supported_schemes = ["PMJDY", "PMSBY", "PMJJBY", "APY", "SSY"]
             
@@ -233,15 +233,44 @@ async def my_agent(ctx: JobContext):
     # Initialize SQLite database
     db.init_db()
 
-    # Retrieve the participant's identity
+    # Retrieve the participant's identity and detect if it is a SIP call
     user_id = "unknown_user"
-    for p_identity in ctx.room.remote_participants.keys():
+    is_sip = ctx.room.name.startswith("outbound_call_room")
+    for p_identity, p_info in ctx.room.remote_participants.items():
         user_id = p_identity
+        if p_info.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            is_sip = True
         break
 
-    logger.info(f"Active connection with user_id: {user_id}")
+    logger.info(f"Active connection with user_id: {user_id}, is_sip: {is_sip}")
 
-    instructions = f"{SYSTEM_PROMPT}\n\nCURRENT USER CALL INFO:\n- Current Caller User ID: {user_id}\n- IMPORTANT: You MUST immediately call `lookup_caller` at the very start of the conversation. If a record is returned, welcome the user back by name and reference their previous interaction (e.g. 'नमस्ते Ramesh जी, पिछली बार हमने आपके Atal Pension Yojana के बारे में बात की थी। क्या उससे जुड़ा कोई सवाल है?'). If no record is found, greet them as a new user."
+    import random
+    schemes_list = [
+        "Pradhan Mantri Jan Dhan Yojana",
+        "Pradhan Mantri Suraksha Bima Yojana",
+        "Pradhan Mantri Jeevan Jyoti Bima Yojana",
+        "Atal Pension Yojana",
+        "Sukanya Samriddhi Yojana"
+    ]
+    selected_scheme = random.choice(schemes_list)
+
+    if is_sip:
+        instructions = (
+            f"{SYSTEM_PROMPT}\n\n"
+            "OUTBOUND CALL SCENARIO:\n"
+            "- Ignore any default returning caller logic. Do NOT check for returning caller facts or greet them by name at the start.\n"
+            "- IMPORTANT: You MUST strictly open the conversation with these first two sentences in English:\n"
+            "  1. 'Hello, this is Shreya calling from Jan Sahay.'\n"
+            f"  2. 'We found you eligible for the {selected_scheme} scheme, and the deadline is on August 15th, so hurry up! If you want to know more, say yes, and if you want to stop these calls, say no.'\n"
+            f"- If the user says 'yes', you must explain the eligibility criteria for ONLY the {selected_scheme} scheme in EXACTLY ONE SHORT SENTENCE (under 15 words). Do NOT explain any other schemes and do NOT use long paragraphs.\n"
+            "- IMPORTANT: To avoid speaking all at once, you MUST speak slowly and keep your responses extremely short (under 15 words).\n"
+            "- If the user says 'no', you must wrap up the call. If they ask how to stop these types of calls, reply exactly: 'To stop these calls, press or say 1.'\n"
+            "- Do not ask any questions during the main explanation.\n"
+            "- Do not say anything else in your opening turn. Wait for the user's response after this opening."
+        )
+    else:
+        instructions = f"{SYSTEM_PROMPT}\n\nCURRENT USER CALL INFO:\n- Current Caller User ID: {user_id}\n- IMPORTANT: You MUST immediately call `lookup_caller` at the very start of the conversation. If a record is returned, welcome the user back by name and reference their previous interaction (e.g. 'नमस्ते Ramesh जी, पिछली बार हमने आपके Atal Pension Yojana के बारे में बात की थी। क्या उससे जुड़ा कोई सवाल है?'). If no record is found, greet them as a new user."
+
 
 
     # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
@@ -261,7 +290,7 @@ async def my_agent(ctx: JobContext):
             ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        preemptive_generation=True,
+        preemptive_generation=False,
     )
 
     # Start the session, which initializes the voice pipeline and warms up the models
@@ -282,6 +311,15 @@ async def my_agent(ctx: JobContext):
 
     # Join the room and connect to the user
     await ctx.connect()
+
+    if is_sip:
+        # Trigger the compliant 2-sentence opening greeting automatically for the outbound call
+        await session.say(
+            f"Hello, this is Shreya calling from Jan Sahay. "
+            f"We found you eligible for the {selected_scheme} scheme, and the deadline is on August 15th, so hurry up! "
+            f"If you want to know more, say yes, and if you want to stop these calls, say no.",
+            allow_interruptions=True
+        )
 
 
 if __name__ == "__main__":
