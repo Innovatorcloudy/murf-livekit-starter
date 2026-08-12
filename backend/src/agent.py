@@ -51,6 +51,47 @@ class Assistant(Agent):
         return f"No record found for user ID: {self.user_id}"
 
     @function_tool
+    async def create_escalation(
+        self,
+        caller_name: str,
+        situation: str,
+        what_happened: str,
+        urgency: str,
+        language: str,
+        follow_up_method: str,
+        contact_details: str,
+        checked_facts: dict = {}
+    ) -> str:
+        """Creates a human support request/escalation in the database when the caller reports fraud or requests a manual decision.
+        Always verify the caller has given verbal permission/consent before calling this.
+        Do NOT save credit card numbers, passwords, OTPs, PINs, or account numbers in the what_happened details.
+        
+        Args:
+            caller_name: The caller's name.
+            situation: Short description of the reason, e.g. "Fraud Reporting" or "Manual Approval Request".
+            what_happened: Detailed explanation of the caller's concern.
+            urgency: How urgent this issue is. Must be exactly one of: "Low", "Medium", "High", "Emergency".
+            language: The caller's preferred language.
+            follow_up_method: The caller's preferred contact method (e.g., Phone Call, SMS, Email).
+            contact_details: Phone number or email to reach them.
+            checked_facts: Key-value facts/context the agent already checked.
+        """
+        logger.info(f"Tool create_escalation called for user_id: {self.user_id}, name: {caller_name}")
+        ref_id = db.create_escalation(
+            caller_id=self.user_id,
+            caller_name=caller_name,
+            situation=situation,
+            what_happened=what_happened,
+            checked_facts=checked_facts,
+            urgency=urgency,
+            language=language,
+            follow_up_method=follow_up_method,
+            contact_details=contact_details
+        )
+        return ref_id
+
+
+    @function_tool
     async def save_caller_facts(self, name: str, language_preference: str, facts: dict) -> str:
         """Saves current caller's details and facts (e.g. checked schemes, eligibility answers) to the database.
         Always verify the caller has given verbal permission/consent before calling this.
