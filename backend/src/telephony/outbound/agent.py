@@ -1,4 +1,6 @@
 import logging
+import sys
+import os
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -18,26 +20,34 @@ from livekit.agents import (
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+# Ensure the root of the backend directory is in the sys.path so we can import src modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
 try:
-    from prompt import SYSTEM_PROMPT
-except ImportError:
     from src.prompt import SYSTEM_PROMPT
+except ImportError:
+    try:
+        from prompt import SYSTEM_PROMPT
+    except ImportError:
+        SYSTEM_PROMPT = "You are a helpful assistant."
 
 try:
-    import db
-except ImportError:
     import src.db as db
+except ImportError:
+    try:
+        import db
+    except ImportError:
+        raise ImportError("Could not import database module 'db'")
 
 
 class Assistant(Agent):
-    def __init__(self, user_id: str, call_id: str, instructions: str = SYSTEM_PROMPT) -> None:
+    def __init__(self, user_id: str, instructions: str = SYSTEM_PROMPT) -> None:
         super().__init__(instructions=instructions)
         self.user_id = user_id
-        self.call_id = call_id
 
     @function_tool
     async def lookup_caller(self) -> str:
@@ -50,59 +60,6 @@ class Assistant(Agent):
             import json
             return json.dumps(user_info)
         return f"No record found for user ID: {self.user_id}"
-
-    @function_tool
-    async def create_escalation(
-        self,
-        caller_name: str,
-        situation: str,
-        what_happened: str,
-        urgency: str,
-        language: str,
-        follow_up_method: str,
-        contact_details: str,
-        checked_facts: dict = {}
-    ) -> str:
-        """Creates a human support request/escalation in the database when the caller reports fraud or requests a manual decision.
-        Always verify the caller has given verbal permission/consent before calling this.
-        Do NOT save credit card numbers, passwords, OTPs, PINs, or account numbers in the what_happened details.
-        
-        Args:
-            caller_name: The caller's name.
-            situation: Short description of the reason, e.g. "Fraud Reporting" or "Manual Approval Request".
-            what_happened: Detailed explanation of the caller's concern.
-            urgency: How urgent this issue is. Must be exactly one of: "Low", "Medium", "High", "Emergency".
-            language: The caller's preferred language.
-            follow_up_method: The caller's preferred contact method (e.g., Phone Call, SMS, Email).
-            contact_details: Phone number or email to reach them.
-            checked_facts: Key-value facts/context the agent already checked.
-        """
-        logger.info(f"Tool create_escalation called for user_id: {self.user_id}, name: {caller_name}")
-        ref_id = db.create_escalation(
-            caller_id=self.user_id,
-            caller_name=caller_name,
-            situation=situation,
-            what_happened=what_happened,
-            checked_facts=checked_facts,
-            urgency=urgency,
-            language=language,
-            follow_up_method=follow_up_method,
-            contact_details=contact_details
-        )
-        db.update_call_progress(self.call_id, status="success", outcome_type="Escalation")
-        return ref_id
-
-    @function_tool
-    async def record_refusal(self, reason: str) -> str:
-        """Call this tool if the caller explicitly declines to participate, says 'no' to receiving details or consent, or requests to stop the call/communication.
-        
-        Args:
-            reason: The reason for refusal (e.g. 'Declined outbound offer', 'Refused consent to save facts', 'Refused escalation permission').
-        """
-        logger.info(f"Tool record_refusal called: {reason}")
-        db.update_call_progress(self.call_id, failure_category="User declined")
-        return "Refusal recorded successfully."
-
 
     @function_tool
     async def save_caller_facts(self, name: str, language_preference: str, facts: dict) -> str:
@@ -182,7 +139,6 @@ class Assistant(Agent):
                 })
                 
             if name_upper == "PMJDY":
-                # Pradhan Mantri Jan Dhan Yojana
                 is_eligible = age >= 10
                 reason = "Eligible. Open to any resident Indian citizen aged 10 or above. (Designed for individuals who do not have any other bank account)." if is_eligible else "Ineligible. Min age to open PMJDY account is 10 years."
                 docs = ["Aadhaar Card (primary KYC)", "PAN Card (if available)", "Or other officially valid document (Voter ID, driving license, NREGA card)"]
@@ -191,7 +147,6 @@ class Assistant(Agent):
                 }
                 
             elif name_upper == "PMSBY":
-                # Pradhan Mantri Suraksha Bima Yojana
                 is_eligible = 18 <= age <= 70
                 reason = "Eligible. Open to individuals aged between 18 and 70 years." if is_eligible else f"Ineligible. Age must be between 18 and 70 years. Provided age: {age}."
                 docs = ["Aadhaar Card (primary KYC)", "Savings bank account details", "Consent form for auto-debit of premium"]
@@ -202,7 +157,6 @@ class Assistant(Agent):
                 }
                 
             elif name_upper == "PMJJBY":
-                # Pradhan Mantri Jeevan Jyoti Bima Yojana
                 is_eligible = 18 <= age <= 50
                 reason = "Eligible. Open to individuals aged between 18 and 50 years." if is_eligible else f"Ineligible. Age must be between 18 and 50 years. Provided age: {age}."
                 docs = ["Aadhaar Card (primary KYC)", "Savings bank account details", "Consent form for auto-debit of premium", "Self-declaration of good health (if enrolling late)"]
@@ -213,7 +167,6 @@ class Assistant(Agent):
                 }
                 
             elif name_upper == "APY":
-                # Atal Pension Yojana
                 if is_income_tax_payer:
                     is_eligible = False
                     reason = "Ineligible. Income tax payers are not eligible to join Atal Pension Yojana (rule effective since October 1, 2022)."
@@ -228,7 +181,6 @@ class Assistant(Agent):
                 }
                 
             elif name_upper == "SSY":
-                # Sukanya Samriddhi Yojana
                 if girl_child_age == -1:
                     return json.dumps({
                         "eligible": "uncertain",
@@ -246,7 +198,6 @@ class Assistant(Agent):
                     "maturity": "Matures after 21 years from account opening or upon marriage of the girl child after she reaches 18 years."
                 }
                 
-            db.update_call_progress(self.call_id, status="success", outcome_type="Eligibility Check")
             return json.dumps({
                 "eligible": is_eligible,
                 "reason": reason,
@@ -257,7 +208,6 @@ class Assistant(Agent):
             
         except Exception as e:
             logger.error(f"Error checking scheme eligibility: {e}")
-            db.update_call_progress(self.call_id, failure_category="API error")
             return json.dumps({
                 "eligible": "error",
                 "reason": "The eligibility checker system is temporarily experiencing technical issues. Please check the inputs or try again shortly.",
@@ -266,7 +216,6 @@ class Assistant(Agent):
                 "data_last_updated": today_str,
                 "error": str(e)
             })
-
 
 
 server = AgentServer()
@@ -299,18 +248,6 @@ async def my_agent(ctx: JobContext):
         break
 
     logger.info(f"Active connection with user_id: {user_id}, is_sip: {is_sip}")
-    db.init_call_outcome(ctx.job.id, user_id, is_sip)
-
-    import time
-    call_start_time = time.time()
-
-    def on_shutdown():
-        import time
-        duration = int(time.time() - call_start_time)
-        logger.info(f"Call {ctx.job.id} shutdown callback. Duration: {duration}s")
-        db.finalize_call_outcome(ctx.job.id, duration)
-
-    ctx.add_shutdown_callback(on_shutdown)
 
     import random
     schemes_list = [
@@ -339,19 +276,14 @@ async def my_agent(ctx: JobContext):
     else:
         instructions = f"{SYSTEM_PROMPT}\n\nCURRENT USER CALL INFO:\n- Current Caller User ID: {user_id}\n- IMPORTANT: You MUST immediately call `lookup_caller` at the very start of the conversation. If a record is returned, welcome the user back by name and reference their previous interaction (e.g. 'नमस्ते Ramesh जी, पिछली बार हमने आपके Atal Pension Yojana के बारे में बात की थी। क्या उससे जुड़ा कोई सवाल है?'). If no record is found, greet them as a new user."
 
-
-
     # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         stt=deepgram.STT(model="nova-3", language="multi"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         llm=google.LLM(
                 model="gemini-3.6-flash",
             ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         tts=murf.TTS(
-                voice="Anisha", # make sure locale key is not hardcoded
+                voice="Anisha",
                 style="Conversation",
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
                 text_pacing=True
@@ -361,27 +293,9 @@ async def my_agent(ctx: JobContext):
         preemptive_generation=False,
     )
 
-    # Set up latency listeners on session
-    user_stopped_time = 0.0
-
-    @session.on("user_stopped_speaking")
-    def on_user_stopped_speaking():
-        nonlocal user_stopped_time
-        import time
-        user_stopped_time = time.time()
-
-    @session.on("agent_started_speaking")
-    def on_agent_started_speaking():
-        nonlocal user_stopped_time
-        import time
-        if user_stopped_time > 0:
-            latency = time.time() - user_stopped_time
-            db.add_latency_measurement(ctx.job.id, latency)
-            user_stopped_time = 0.0
-
-    # Start the session, which initializes the voice pipeline and warms up the models
+    # Start the session
     await session.start(
-        agent=Assistant(user_id=user_id, call_id=ctx.job.id, instructions=instructions),
+        agent=Assistant(user_id=user_id, instructions=instructions),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
