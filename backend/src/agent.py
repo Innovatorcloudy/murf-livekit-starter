@@ -542,9 +542,9 @@ class Assistant(BaseJanSahayAgent):
             except Exception as e:
                 logger.warning(f"Could not speak handoff announcement: {e}")
 
-        # Step 6: 5-second transition delay showing connecting status before voice changes
-        logger.info(f"[TRANSITION IN PROGRESS] Connecting to {spec_name_en}... Holding for 5 seconds before switching voice.")
-        await asyncio.sleep(5.0)
+        # Transition directly to specialist voice with minimal delay
+        logger.info(f"[TRANSITION IN PROGRESS] Connecting to {spec_name_en}... Switching voice immediately.")
+        await asyncio.sleep(0.2)
 
         # Step 7: Dynamically switch Murf TTS voice to specialist voice (Samar/Pooja/Palak)
         voice_cfg = get_voice_config_for_agent(spec_key, language_pref)
@@ -608,9 +608,9 @@ class Assistant(BaseJanSahayAgent):
             except Exception as e:
                 logger.warning(f"Could not speak return announcement: {e}")
 
-        # 5-second transition delay
-        logger.info("[TRANSITION IN PROGRESS] Connecting back to Anisha... Holding for 5 seconds before switching voice.")
-        await asyncio.sleep(5.0)
+        # Transition directly back to main guide with minimal delay
+        logger.info("[TRANSITION IN PROGRESS] Connecting back to Anisha... Switching voice immediately.")
+        await asyncio.sleep(0.2)
 
         # Reset voice back to main intake guide (Anisha)
         voice_cfg = get_voice_config_for_agent("default", language_pref)
@@ -872,7 +872,10 @@ server = AgentServer()
 
 
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=0.15,
+        min_silence_duration=0.25
+    )
 
 
 server.setup_fnc = prewarm
@@ -947,21 +950,22 @@ async def my_agent(ctx: JobContext):
             f"If no record is found, greet them as a new user."
         )
 
-    # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
+    # Set up low-latency voice AI pipeline using Murf Falcon, Gemini 2.5 Flash, Deepgram Nova-3, and preemptive generation
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=google.LLM(
-            model="gemini-3.7-flash",
+            model="gemini-2.5-flash",
+            temperature=0.7,
         ),
         tts=murf.TTS(
             voice="Anisha",
             style="Conversation",
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=1),
             text_pacing=True
         ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        preemptive_generation=False,
+        preemptive_generation=True,
     )
 
     # Set up latency listeners on session
