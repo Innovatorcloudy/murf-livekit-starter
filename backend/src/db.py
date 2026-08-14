@@ -316,7 +316,18 @@ def update_call_progress(call_id: str, duration: int = None, status: str = None,
     conn.close()
 
 
+def record_specialist_handoff(call_id: str, specialist_type: str, reason: str = ""):
+    """Records a specialist handoff event in the call outcome progress."""
+    update_call_progress(
+        call_id,
+        status="success",
+        outcome_type=f"Handoff: {specialist_type.capitalize()} Specialist"
+    )
+
+
 def finalize_call_outcome(call_id: str, duration: int):
+
+
     """Updates final call duration and refines default failure category to 'User hang-up' if they spent time on the call."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
